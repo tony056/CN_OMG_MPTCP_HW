@@ -6,7 +6,7 @@
 #include <arpa/inet.h>
 #include <string.h>
 #include <netdb.h>
-
+#include <fcntl.h>
 
 #define BUFLEN 512
 #define NPACK 10
@@ -15,7 +15,7 @@
 
 
 struct sockaddr_in si_other;
-int slen = 0;
+int slen = 0, nameLength = 0, fin = -1, ackType = -1;
 
 void diep(char *a){
 	perror(a);
@@ -23,16 +23,24 @@ void diep(char *a){
 	return ;
 }
 unsigned char * encode_int(unsigned char *buffer, int value);
-unsigned char * encode_char(unsigned char *buffer, char value);
-unsigned char * encode_strcut(unsigned char *buffer, int a, char b);
-void send_packet(int s, int a, char b);
+unsigned char * encode_char(unsigned char *buffer, char *value);
+unsigned char * encode_struct(unsigned char *buffer, int a, char *b);
+void send_connection_packet(char *filename, int s);
+void send_data_packet(unsigned char *buffer);
+void send_end_packet(int s);
+
 
 int main(int argc, char** argv){
 
 	
 	int s, i;
 	slen = sizeof(si_other);
-	
+	char fileName[1000];
+
+	strcpy(fileName, argv[1]);
+	nameLength = strlen(fileName);
+	if(argc != 2)
+		diep("please enter filename");
 
 	if((s=socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)) == -1)
 		diep("socket");
@@ -45,15 +53,16 @@ int main(int argc, char** argv){
 		exit(1);
 	}
 
-	for(i = 0;i < NPACK; i++){
-		//printf("Sending packet %d\n", i);
-		unsigned char str = 'i';
-		unsigned int num = 1000 + i;
-		
-		send_packet(s, num, str);
-		
+	while(fin < 0){
+		if(ackType == -1)
+			send_connection_packet(fileName, s);
+		else if(ackType == 1){}
+			//send_data_packet();
+		else
+			send_end_packet(s);
+			
 	}
-	
+	printf("end the connection\n");
 	close(s);
 	return 0;
 }
@@ -68,30 +77,89 @@ unsigned char * encode_int(unsigned char *buffer, int value){
 
 }
 
-unsigned char * encode_char(unsigned char *buffer, char value){
+unsigned char * encode_char(unsigned char *buffer, char *value){
 
-	buffer[0] = value;
-	return buffer + 1;
+	int n = strlen(value), i = 0;
+
+	for(i = 0;i < n; i++){
+		buffer[i] = value[i];
+	}
+
+	return buffer + n;
 
 }
 
-void send_packet(int s, int a, char b){
+/*void send_packet(int s, int a, char b){
 
 	unsigned char buf[32];
 	unsigned char *ptr;
+	char ack[4];
+	ack[3] = '\0';
 
 	ptr = encode_strcut(buf, a, b);
 	
 	if(sendto(s, buf, ptr - buf, 0, &si_other, slen) == -1)
 		diep("sendto()");
+	if(recvfrom(s, ack, 3, 0, &si_other, &slen) == -1)
+		diep("recvfrom");
+
+	printf("ack: %s\n", ack);
+
+}*/
+
+unsigned char * encode_struct(unsigned char *buffer, int a, char *b){
+
+	buffer = encode_int(buffer, a);
+	//buufer = encode_int(buffer, nameLength);
+	buffer = encode_char(buffer, b);
+
+	
+	return buffer;
 
 }
 
-unsigned char * encode_strcut(unsigned char *buffer, int a, char b){
+void send_connection_packet(char *fileName, int s){
+
+	// packet style: file name + file size
+	// ack style: num
+	char readBuffer[1000],ack[2];
+	int f, fileLength = 0, i;
+	unsigned char buf[fileLength], *ptr;
+	ack[1] = '\0';
 
 
-	buffer = encode_char(buffer, b);
-	buffer = encode_int(buffer, a);
-	return buffer;
+	if((f = open(fileName, O_RDONLY)) == -1)	
+		diep("open file failed");
+	while((i = read(f, readBuffer, 1000)) > 0){
+		fileLength += i;
+	}
+	
+	ptr = encode_struct(buf, fileLength, fileName);
+
+	if(sendto(s, buf, ptr - buf, 0, &si_other, slen) == -1)
+		diep("connection packet error\n");
+	while(recvfrom(s, ack, 1, 0, &si_other, &slen) < 0){}
+	printf("the recv ack is : %s\n", ack);
+	ackType = 2;
+	
+}
+
+void send_end_packet(int s){
+
+	printf("send_end_packet\n");
+	char end[2], rec[2];
+	end[0] = '1';
+	end[1] = '\0';
+	rec[1] = '\0';
+	if(sendto(s, end, 1, 0, &si_other, slen) == -1)
+			diep("end packet error\n");
+	while(recvfrom(s, rec, 1, 0, &si_other, &slen) < 0){
+		if(sendto(s, end, 1, 0, &si_other, slen) == -1)
+			diep("end packet error\n");
+	}
+
+	if(rec[0] != '1')
+		diep("wrong fin\n");
+	fin = 1;
 
 }

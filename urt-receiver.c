@@ -10,6 +10,10 @@
 #define BUFLEN 512
 #define NPACK 10
 #define PORT 9930
+#define NAMELENGTH 100
+
+struct sockaddr_in si_me, si_other;
+int slen = 0, s, connection = -1, end = -1;
 
 void diep(char *a){
 	perror(a);
@@ -18,13 +22,16 @@ void diep(char *a){
 }
 
 void decode_buffer(unsigned char *buffer);
+void decode_fileContent(unsigned char *buffer);
 unsigned int decode_int(unsigned char *buffer);
-unsigned char decode_char(unsigned char *buffer);
+char* decode_char(unsigned char *buffer);
+int send_ack(int type, int sequenceNum);
 
 int main(int argc, char** argv){
 
-	struct sockaddr_in si_me, si_other;
-	int s, i, slen = sizeof(si_other);
+	
+	int i;
+	slen = sizeof(si_other);
 	unsigned char buf[BUFLEN];
 
 	if((s=socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)) == -1)
@@ -34,16 +41,21 @@ int main(int argc, char** argv){
 	si_me.sin_family = AF_INET;
 	si_me.sin_port = htons(PORT);
 	si_me.sin_addr.s_addr = htonl(INADDR_ANY);
+
 	if(bind(s, &si_me, sizeof(si_me)) == -1)
 		diep("bind");
 
-	for(i = 0; i < NPACK; i++){
+	while(end < 0){
 
 		if(recvfrom(s, buf, BUFLEN, 0, &si_other, &slen) == -1)
 			diep("recvfrom");
-		else
+		if(connection < 0)
 			decode_buffer(buf);
+		else{
 
+			decode_fileContent(buf);
+
+		}
 
 	}
 
@@ -55,12 +67,22 @@ int main(int argc, char** argv){
 void decode_buffer(unsigned char *buffer){
 
 	printf("Start decoding the packet!!\n");
-	unsigned char str = decode_char(buffer);
-	buffer ++;
+	
 	unsigned int ans = decode_int(buffer);
+	buffer +=4;
+	//unsigned int langth = decode_int(buffer);
+	unsigned char *str = malloc(sizeof(char) * NAMELENGTH);
+	str = decode_char(buffer); 
+	
+	printf("decoded buffer is: %s, %d\n",  str, ans);
 
-	//char decodeString[1000];
-	printf("decoded buffer is: %c, %d\n",  str, ans);
+	while(send_ack(1, -1) < 0){
+
+		printf("failed ack\n");
+
+	}
+	connection = 1;
+	
 	return;
 
 }
@@ -69,6 +91,7 @@ unsigned int decode_int(unsigned char *buffer){
 
 	unsigned int ans = 0;
 	int i = 0;
+
 	for(i = 0; i < 4;i++){
 		ans += buffer[i];
 		if(i != 3) ans = ans << 8;
@@ -78,10 +101,45 @@ unsigned int decode_int(unsigned char *buffer){
 
 }
 
-unsigned char decode_char(unsigned char *buffer){
+char* decode_char(unsigned char *buffer){
 
-	unsigned char c;
-	c = buffer[0];
-	return c;
+	char str[NAMELENGTH];
+	int i = 0;
 
+	while(buffer[i] != NULL){
+		str[i] = buffer[i];
+		i++;
+	}
+	str[i] = '\0';
+	
+	return str;
+	
+}
+
+int send_ack(int type, int sequenceNum){
+
+	if(type == 1){ //recv connection packet
+		unsigned char ack[2];
+		ack[0] = '1';
+
+		if(sendto(s, ack, sizeof(char) * 1, 0, &si_other, slen) == -1)
+			return -1;
+
+	}
+
+	printf("ack\n");
+	return 1;
+
+}
+
+void decode_fileContent(unsigned char *buffer){
+	char fuck[2];
+	fuck[0] = '1';
+	fuck[1] = '\0';
+	if(strlen(buffer) == 1){ // send back fin
+
+		while(sendto(s, fuck, sizeof(char) * 1, 0, &si_other, slen) < 0){}
+		end = 1;
+	}
+	printf("end the connection\n");
 }
