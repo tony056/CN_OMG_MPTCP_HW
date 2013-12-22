@@ -13,7 +13,7 @@
 #define NAMELENGTH 100
 
 struct sockaddr_in si_me, si_other;
-int slen = 0, s, connection = -1, end = -1;
+int slen = 0, s, connection = -1, end = -1, expectNum = 1;
 
 void diep(char *a){
 	perror(a);
@@ -121,9 +121,9 @@ int send_ack(int type, int sequenceNum){
 	if(type == 1){ //recv connection packet
 		unsigned char ack[2];
 		ack[0] = '1';
-
 		if(sendto(s, ack, sizeof(char) * 1, 0, &si_other, slen) == -1)
 			return -1;
+	}else if(type == 2){
 
 	}
 
@@ -140,6 +140,21 @@ void decode_fileContent(unsigned char *buffer){
 
 		while(sendto(s, fuck, sizeof(char) * 1, 0, &si_other, slen) < 0){}
 		end = 1;
+	}else{
+		int sequence = decode_int(buffer);
+		if(sequence == expectNum){
+			buffer += 4;
+			int length = decode_int(buffer);
+			buffer += 4;
+			char data[length];
+			data = decode_char(buffer);
+			printf("Sequence: %d, %s\n",sequence, data);
+			send_ack(2, expectNum);
+			expectNum += length;
+		}else{
+			send_ack(2, expectNum);
+		}
+
 	}
 	printf("end the connection\n");
 }

@@ -12,10 +12,11 @@
 #define NPACK 10
 #define PORT 9930
 #define SRV_IP "127.0.0.1"
+#define LENGTH 1000
 
 
 struct sockaddr_in si_other;
-int slen = 0, nameLength = 0, fin = -1, ackType = -1;
+int slen = 0, nameLength = 0, fin = -1, ackType = -1, expectNum = 0;
 
 void diep(char *a){
 	perror(a);
@@ -25,9 +26,11 @@ void diep(char *a){
 unsigned char * encode_int(unsigned char *buffer, int value);
 unsigned char * encode_char(unsigned char *buffer, char *value);
 unsigned char * encode_struct(unsigned char *buffer, int a, char *b);
+unsigned char * encode_data_struct(unsigned char *buffer, int length, int sequence, char* data);
 void send_connection_packet(char *filename, int s);
-void send_data_packet(unsigned char *buffer);
+void send_data_packet(char *fileName, int s);
 void send_end_packet(int s);
+int decode_ack(char *ack);
 
 
 int main(int argc, char** argv){
@@ -56,8 +59,8 @@ int main(int argc, char** argv){
 	while(fin < 0){
 		if(ackType == -1)
 			send_connection_packet(fileName, s);
-		else if(ackType == 1){}
-			//send_data_packet();
+		else if(ackType == 1)
+			send_data_packet(fileName, s);
 		else
 			send_end_packet(s);
 			
@@ -110,10 +113,19 @@ unsigned char * encode_char(unsigned char *buffer, char *value){
 unsigned char * encode_struct(unsigned char *buffer, int a, char *b){
 
 	buffer = encode_int(buffer, a);
-	//buufer = encode_int(buffer, nameLength);
 	buffer = encode_char(buffer, b);
 
 	
+	return buffer;
+
+}
+
+unsigned char * encode_data_struct(unsigned char *buffer, int length, int sequence, char *data){
+
+	buffer = encode_int(buffer, sequence);
+	buffer = encode_int(buffer, length);
+	buffer = encode_char(buffer, data);
+
 	return buffer;
 
 }
@@ -140,7 +152,8 @@ void send_connection_packet(char *fileName, int s){
 		diep("connection packet error\n");
 	while(recvfrom(s, ack, 1, 0, &si_other, &slen) < 0){}
 	printf("the recv ack is : %s\n", ack);
-	ackType = 2;
+	ackType = 1;
+	expectNum = 1;
 	
 }
 
@@ -161,5 +174,37 @@ void send_end_packet(int s){
 	if(rec[0] != '1')
 		diep("wrong fin\n");
 	fin = 1;
+
+}
+
+void send_data_packet(char *fileName, int s){
+	//packet style: sequence num + length + data
+	printf("send_data_packet\n");
+	int f, i, fileLength = 0;
+	char readBuffer[LENGTH], ack[5];
+	unsigned char buf[LENGTH + 8], *ptr;
+	ack[4] = '\0';
+	if(expectNum < 1) diep("can not start sending data packet \n");
+	if((f = open(fileName, O_RDONLY) == -1) diep("can not open the file when sending data packets\n");
+	while((i = read(f, readBuffer, LENGTH)) > 0){
+		printf("reading \n");
+		ptr = encode_data_struct(buf, i, expectNum, readBuffer);
+		expectNum += i;
+		fileLength += i;
+		while(recvfrom(s, ack, sizeof(char) * 4, 0, &si_other, &slen) < 0 || expectNum != decode_ack(ack)){
+			if(sendto(s, buf, ptr - buf, 0, &si_other, slen) < 0)
+				diep("send error\n");
+		}
+	}
+	if(expectNum - 1 != fileLength) diep("data sending error\n");
+
+}
+
+int decode_ack(char *ack){
+
+	if(ack != NULL){
+		return atoi(ack);
+	}
+	return -1;
 
 }
