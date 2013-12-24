@@ -31,6 +31,7 @@ void send_connection_packet(char *filename, int s);
 void send_data_packet(char *fileName, int s);
 void send_end_packet(int s);
 int decode_ack(char *ack);
+unsigned int decode_int(unsigned char *buffer);
 
 
 int main(int argc, char** argv){
@@ -72,6 +73,7 @@ int main(int argc, char** argv){
 
 unsigned char * encode_int(unsigned char *buffer, int value){
 
+	printf("encode int\n");
 	int i = 0;
 	for(i = 0;i < 4;i++){
 		buffer[i] = value >> (24 - 8 * i);
@@ -82,6 +84,7 @@ unsigned char * encode_int(unsigned char *buffer, int value){
 
 unsigned char * encode_char(unsigned char *buffer, char *value){
 
+	printf("encode char\n");
 	int n = strlen(value), i = 0;
 
 	for(i = 0;i < n; i++){
@@ -150,7 +153,9 @@ void send_connection_packet(char *fileName, int s){
 
 	if(sendto(s, buf, ptr - buf, 0, &si_other, slen) == -1)
 		diep("connection packet error\n");
-	while(recvfrom(s, ack, 1, 0, &si_other, &slen) < 0){}
+	while(recvfrom(s, ack, 1, 0, &si_other, &slen) < 0){
+		sendto(s, buf, ptr - buf, 0, &si_other, slen);
+	}
 	printf("the recv ack is : %s\n", ack);
 	ackType = 1;
 	expectNum = 1;
@@ -185,26 +190,52 @@ void send_data_packet(char *fileName, int s){
 	unsigned char buf[LENGTH + 8], *ptr;
 	ack[4] = '\0';
 	if(expectNum < 1) diep("can not start sending data packet \n");
-	if((f = open(fileName, O_RDONLY) == -1) diep("can not open the file when sending data packets\n");
+	if((f = open(fileName, O_RDONLY)) == -1) diep("can not open the file when sending data packets\n");
 	while((i = read(f, readBuffer, LENGTH)) > 0){
 		printf("reading \n");
 		ptr = encode_data_struct(buf, i, expectNum, readBuffer);
 		expectNum += i;
 		fileLength += i;
-		while(recvfrom(s, ack, sizeof(char) * 4, 0, &si_other, &slen) < 0 || expectNum != decode_ack(ack)){
+		printf("ready recv\n");
+		while(1){
 			if(sendto(s, buf, ptr - buf, 0, &si_other, slen) < 0)
 				diep("send error\n");
+			//recvfrom(s, ack, sizeof(char) * 4, 0, &si_other, &slen) < 0 || expectNum != decode_ack(ack)
+			if(recvfrom(s, ack, sizeof(char) * 4, 0, &si_other, &slen) >= 0){
+				if(expectNum == decode_ack(ack))
+					break;
+			}
+			printf("recv error\n");
+			
 		}
 	}
 	if(expectNum - 1 != fileLength) diep("data sending error\n");
+	else ackType = 2;
 
 }
 
 int decode_ack(char *ack){
+	//printf("decode_ack:%d\n", strlen(ack));
 
 	if(ack != NULL){
-		return atoi(ack);
+		printf("expect sequence: %d\n", decode_int(ack));
+		return decode_int(ack);
 	}
 	return -1;
+
+}
+
+unsigned int decode_int(unsigned char *buffer){
+
+	unsigned int ans = 0;
+	int i = 0;
+	printf("%s\n", "decode int");
+
+	for(i = 0; i < 4;i++){
+		ans += buffer[i];
+		if(i != 3) ans = ans << 8;
+	}
+	//printf("decode_int: %d\n", ans);
+	return ans;
 
 }
