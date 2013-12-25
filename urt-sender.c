@@ -7,6 +7,7 @@
 #include <string.h>
 #include <netdb.h>
 #include <fcntl.h>
+#include <signal.h>
 
 #define BUFLEN 512
 #define NPACK 10
@@ -14,14 +15,18 @@
 #define SRV_IP "127.0.0.1"
 #define LENGTH 1000
 
-
+// header : add ip addr + port + filelength + flag;
+// agent: change destination 
 struct sockaddr_in si_other;
-int slen = 0, nameLength = 0, fin = -1, ackType = -1, expectNum = 0;
+int slen = 0, nameLength = 0, fin = -1, ackType = -1, expectNum = 0, resend = 0;
 
 void diep(char *a){
 	perror(a);
 	//exit(1);
 	return ;
+}
+void sighandler(int signo){
+	resend = 1;
 }
 unsigned char * encode_int(unsigned char *buffer, int value);
 unsigned char * encode_char(unsigned char *buffer, char *value);
@@ -40,11 +45,17 @@ int main(int argc, char** argv){
 	int s, i;
 	slen = sizeof(si_other);
 	char fileName[1000];
+	struct sigaction act;
+	act.sa_handler = sighandler;
+	act.sa_flags = 0;
+
 
 	strcpy(fileName, argv[1]);
 	nameLength = strlen(fileName);
 	if(argc != 2)
 		diep("please enter filename");
+	if(sigaction(SIGALRM, &act, 0) == -1)
+		perror("sigaction\n");
 
 	if((s=socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)) == -1)
 		diep("socket");
@@ -84,14 +95,14 @@ unsigned char * encode_int(unsigned char *buffer, int value){
 
 unsigned char * encode_char(unsigned char *buffer, char *value){
 
-	printf("encode char\n");
-	int n = strlen(value), i = 0;
+	printf("encode char:\n");
+	int i = 0;
 
-	for(i = 0;i < n; i++){
+	for(i = 0;i < LENGTH; i++){
 		buffer[i] = value[i];
 	}
 
-	return buffer + n;
+	return buffer + LENGTH;
 
 }
 
@@ -138,8 +149,8 @@ void send_connection_packet(char *fileName, int s){
 	// packet style: file name + file size
 	// ack style: num
 	char readBuffer[1000],ack[2];
-	int f, fileLength = 0, i;
-	unsigned char buf[fileLength], *ptr;
+	int f, fileLength = 0, i, j;
+	unsigned char buf[LENGTH + 8], *ptr;
 	ack[1] = '\0';
 
 
@@ -148,8 +159,10 @@ void send_connection_packet(char *fileName, int s){
 	while((i = read(f, readBuffer, 1000)) > 0){
 		fileLength += i;
 	}
+	for(j = 0;j < strlen(fileName); j++)
+		readBuffer[j] = fileName[j];
 	
-	ptr = encode_struct(buf, fileLength, fileName);
+	ptr = encode_struct(buf, fileLength, readBuffer);
 
 	if(sendto(s, buf, ptr - buf, 0, &si_other, slen) == -1)
 		diep("connection packet error\n");
@@ -186,27 +199,30 @@ void send_data_packet(char *fileName, int s){
 	//packet style: sequence num + length + data
 	printf("send_data_packet\n");
 	int f, i, fileLength = 0;
-	char readBuffer[LENGTH], ack[5];
+	char readBuffer[LENGTH + 1], ack[5];
 	unsigned char buf[LENGTH + 8], *ptr;
 	ack[4] = '\0';
 	if(expectNum < 1) diep("can not start sending data packet \n");
 	if((f = open(fileName, O_RDONLY)) == -1) diep("can not open the file when sending data packets\n");
 	while((i = read(f, readBuffer, LENGTH)) > 0){
-		printf("reading \n");
+		readBuffer[i] = '\0';
+		printf("reading: %s\n", readBuffer);
 		ptr = encode_data_struct(buf, i, expectNum, readBuffer);
 		expectNum += i;
 		fileLength += i;
-		printf("ready recv\n");
-		while(1){
+		//printf("ready recv\n");
+		while(1){ // small loop to do congestion control
 			if(sendto(s, buf, ptr - buf, 0, &si_other, slen) < 0)
 				diep("send error\n");
+			alarm(5);
 			//recvfrom(s, ack, sizeof(char) * 4, 0, &si_other, &slen) < 0 || expectNum != decode_ack(ack)
 			if(recvfrom(s, ack, sizeof(char) * 4, 0, &si_other, &slen) >= 0){
-				if(expectNum == decode_ack(ack))
+				if(expectNum == decode_ack(ack)){
+					alarm(0);
 					break;
+				}
 			}
 			printf("recv error\n");
-			
 		}
 	}
 	if(expectNum - 1 != fileLength) diep("data sending error\n");
@@ -235,7 +251,6 @@ unsigned int decode_int(unsigned char *buffer){
 		ans += buffer[i];
 		if(i != 3) ans = ans << 8;
 	}
-	//printf("decode_int: %d\n", ans);
 	return ans;
 
 }
